@@ -13,34 +13,38 @@ function CallbackInner() {
 
   useEffect(() => {
     const run = async () => {
-      try {
-        const code = sp.get("code");
-        const next = sp.get("next") || "/home";
-        const popup = sp.get("popup") === "1";
+      const next = sp.get("next") || "/home";
+      const popup = sp.get("popup") === "1";
 
+      const sendToOpener = (payload) => {
+        try {
+          if (popup && window.opener && !window.opener.closed) {
+            window.opener.postMessage(payload, window.location.origin);
+            return true;
+          }
+        } catch {}
+        return false;
+      };
+
+      try {
         const errDesc = sp.get("error_description") || sp.get("error");
         if (errDesc) {
-          const payload = { type: "supabase-oauth", success: false, error: errDesc };
-          if (window.opener && popup) window.opener.postMessage(payload, window.location.origin);
+          sendToOpener({ type: "supabase-oauth", success: false, error: errDesc });
           setMsg("Login gagal: " + errDesc);
-          if (window.opener && popup) setTimeout(() => window.close(), 400);
+          if (popup) setTimeout(() => window.close(), 400);
           return;
         }
 
-        if (!code) {
-          const payload = { type: "supabase-oauth", success: false, error: "Kode OAuth tidak ditemukan." };
-          if (window.opener && popup) window.opener.postMessage(payload, window.location.origin);
-          setMsg("Kode OAuth tidak ditemukan.");
-          if (window.opener && popup) setTimeout(() => window.close(), 400);
-          return;
-        }
-
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        // ✅ PENTING: pakai URL lengkap, bukan hanya "code"
+        const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
         if (error) throw error;
 
-        const payload = { type: "supabase-oauth", success: true, next };
-        if (window.opener && popup) {
-          window.opener.postMessage(payload, window.location.origin);
+        // pastikan session kebaca
+        await supabase.auth.getSession();
+
+        const ok = sendToOpener({ type: "supabase-oauth", success: true, next });
+
+        if (popup && ok) {
           setMsg("Berhasil. Menutup popup...");
           setTimeout(() => window.close(), 250);
         } else {
@@ -48,12 +52,9 @@ function CallbackInner() {
         }
       } catch (e) {
         const message = e?.message || "Terjadi kesalahan saat memproses login.";
-        const payload = { type: "supabase-oauth", success: false, error: message };
-        try {
-          if (window.opener) window.opener.postMessage(payload, window.location.origin);
-        } catch {}
+        sendToOpener({ type: "supabase-oauth", success: false, error: message });
         setMsg(message);
-        if (window.opener) setTimeout(() => window.close(), 400);
+        if (popup) setTimeout(() => window.close(), 500);
       }
     };
 
@@ -72,7 +73,7 @@ function CallbackInner() {
 
 export default function AuthCallbackPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<div className="min-h-[100dvh] bg-neutral-100" />}>
       <CallbackInner />
     </Suspense>
   );
