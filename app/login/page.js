@@ -1,14 +1,47 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 const supabase = supabaseBrowser;
-
 const PHONE_LOGIN_ENABLED = false;
+
+const RETURN_TO_KEY = "ybg_return_to_after_login";
+
+function isEmail(v) {
+  return /\S+@\S+\.\S+/.test(v);
+}
+
+function isPhone(v) {
+  return /^\+?\d{8,15}$/.test((v || "").replace(/[\s-]/g, ""));
+}
+
+function normalizePhone(v) {
+  let x = (v || "").replace(/[^\d+]/g, "");
+  if (x.startsWith("+62")) return x;
+  if (x.startsWith("62")) return "+" + x;
+  if (x.startsWith("0")) return "+62" + x.slice(1);
+  if (x.startsWith("+")) return x;
+  return "+" + x;
+}
+
+function openCenteredPopup(url, title = "Login Google") {
+  const w = 520;
+  const h = 650;
+  const y = window.top.outerHeight / 2 + window.top.screenY - h / 2;
+  const x = window.top.outerWidth / 2 + window.top.screenX - w / 2;
+  return window.open(
+    url,
+    title,
+    `toolbar=no,location=no,directories=no,status=no,menubar=no,scrollbars=yes,resizable=yes,copyhistory=no,width=${w},height=${h},top=${y},left=${x}`
+  );
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const sp = useSearchParams();
+
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
@@ -16,15 +49,37 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // menentukan "returnTo" (halaman tujuan setelah login)
+  const returnTo = useMemo(() => {
+    // prioritas: query ?next=
+    const nextFromQuery = sp?.get("next");
+    if (nextFromQuery && nextFromQuery.startsWith("/")) return nextFromQuery;
+
+    // fallback: localStorage
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(RETURN_TO_KEY);
+      if (saved && saved.startsWith("/")) return saved;
+    }
+
+    // default
+    return "/"; // balik ke halaman awal
+  }, [sp]);
+
   useEffect(() => {
+    // simpan returnTo (biar konsisten meski reload)
+    try {
+      localStorage.setItem(RETURN_TO_KEY, returnTo);
+    } catch {}
+
     // prefill email setelah reset password
-    const sp = new URLSearchParams(window.location.search);
-    const qEmail = sp.get("email");
-    const qReset = sp.get("reset") === "1";
+    const qs = new URLSearchParams(window.location.search);
+    const qEmail = qs.get("email");
+    const qReset = qs.get("reset") === "1";
     const mem = localStorage.getItem("reset_email") || "";
     const prefill = qEmail || mem;
     if (prefill) setIdentifier(prefill);
     localStorage.removeItem("reset_email");
+
     if (qReset) {
       setMsg("Password telah diubah. Silakan login dengan password baru.");
       window.history.replaceState(
@@ -33,12 +88,14 @@ export default function LoginPage() {
         window.location.pathname + (prefill ? `?email=${encodeURIComponent(prefill)}` : "")
       );
     }
-  }, []);
+  }, [returnTo]);
 
   useEffect(() => {
     // menerima pesan dari popup callback
     const onMessage = async (event) => {
+      // security: hanya terima dari origin yang sama
       if (event.origin !== window.location.origin) return;
+
       const data = event.data;
       if (!data || data.type !== "supabase-oauth") return;
 
@@ -46,7 +103,10 @@ export default function LoginPage() {
         try {
           await supabase.auth.getSession();
         } catch {}
-        router.replace(data.next || "/home");
+
+        // pakai next dari callback, kalau tidak ada pakai returnTo yang tersimpan
+        const next = (data.next && data.next.startsWith("/")) ? data.next : returnTo;
+        router.replace(next);
       } else {
         setMsg(data.error || "Login Google gagal.");
         setGoogleLoading(false);
@@ -55,30 +115,10 @@ export default function LoginPage() {
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [router]);
+  }, [router, returnTo]);
 
-  const isEmail = (v) => /\S+@\S+\.\S+/.test(v);
-  const isPhone = (v) => /^\+?\d{8,15}$/.test((v || "").replace(/[\s-]/g, ""));
-  function normalizePhone(v) {
-    let x = (v || "").replace(/[^\d+]/g, "");
-    if (x.startsWith("+62")) return x;
-    if (x.startsWith("62")) return "+" + x;
-    if (x.startsWith("0")) return "+62" + x.slice(1);
-    if (x.startsWith("+")) return x;
-    return "+" + x;
-  }
-
-  function openCenteredPopup(url, title = "Login Google") {
-    const w = 520;
-    const h = 650;
-    const y = window.top.outerHeight / 2 + window.top.screenY - h / 2;
-    const x = window.top.outerWidth / 2 + window.top.screenX - w / 2;
-    return window.open(
-      url,
-      title,
-      `toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=yes, resizable=yes, copyhistory=no, width=${w}, height=${h}, top=${y}, left=${x}`
-    );
-  }
+  const typingPhoneWhileDisabled =
+    !PHONE_LOGIN_ENABLED && !isEmail(identifier) && isPhone(identifier);
 
   async function onGoogleLogin() {
     if (googleLoading || loading) return;
@@ -86,7 +126,10 @@ export default function LoginPage() {
     setGoogleLoading(true);
 
     try {
-      const next = "/home";
+      // target setelah login: ambil dari returnTo (bisa / atau halaman sebelumnya)
+      const next = returnTo;
+
+      // callback di domain yang sama dengan origin saat ini
       const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(
         next
       )}&popup=1`;
@@ -95,7 +138,7 @@ export default function LoginPage() {
         provider: "google",
         options: {
           redirectTo,
-          skipBrowserRedirect: true, // ✅ supaya dapat data.url, lalu kita open popup manual
+          skipBrowserRedirect: true,
         },
       });
 
@@ -109,7 +152,7 @@ export default function LoginPage() {
         return;
       }
 
-      // fallback kalau user nutup popup manual
+      // fallback: kalau user nutup popup manual
       const timer = setInterval(() => {
         if (win.closed) {
           clearInterval(timer);
@@ -132,6 +175,7 @@ export default function LoginPage() {
 
     const isIdEmail = isEmail(id);
     const isIdPhone = !isIdEmail && isPhone(id);
+
     if (!isIdEmail && !isIdPhone) {
       return setMsg("Format tidak valid. Gunakan email yang benar atau nomor HP (mis. +62812xxxx).");
     }
@@ -150,7 +194,9 @@ export default function LoginPage() {
       if (error) throw error;
 
       await supabase.auth.refreshSession();
-      router.replace("/home");
+
+      // setelah login email/password: balik ke returnTo
+      router.replace(returnTo);
     } catch (err) {
       const t = (err?.message || "").toLowerCase();
       if (t.includes("invalid_grant") || t.includes("invalid login credentials")) {
@@ -167,14 +213,9 @@ export default function LoginPage() {
 
   function handleForgot() {
     const email = identifier.trim();
-    const url = /\S+@\S+\.\S+/.test(email)
-      ? `/forgot?email=${encodeURIComponent(email)}`
-      : `/forgot`;
+    const url = isEmail(email) ? `/forgot?email=${encodeURIComponent(email)}` : `/forgot`;
     router.push(url);
   }
-
-  const typingPhoneWhileDisabled =
-    !PHONE_LOGIN_ENABLED && !isEmail(identifier) && isPhone(identifier);
 
   return (
     <div className="min-h-[100dvh] bg-neutral-100">
@@ -187,7 +228,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* ✅ Google Popup Login */}
+        {/* Google Popup Login */}
         <button
           type="button"
           onClick={onGoogleLogin}
