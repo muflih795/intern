@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { createSupabaseServerClient } from "@/lib/supabaseServer";
 
 export async function GET(req) {
   const url = new URL(req.url);
@@ -18,9 +18,10 @@ export async function GET(req) {
 <script>
   try {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: "supabase-oauth", success: false, error: "Kode OAuth tidak ditemukan." }, ${JSON.stringify(
-        openerOrigin
-      )});
+      window.opener.postMessage(
+        { type: "supabase-oauth", success: false, error: "Kode OAuth tidak ditemukan." },
+        ${JSON.stringify(openerOrigin)}
+      );
     }
   } catch (e) {}
   window.close();
@@ -33,7 +34,8 @@ Kode OAuth tidak ditemukan.
     return NextResponse.redirect(new URL(`/login?error=missing_code`, url.origin));
   }
 
-  const supabase = supabaseServer();
+  const supabase = createSupabaseServerClient();
+
   const { error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error) {
@@ -43,9 +45,10 @@ Kode OAuth tidak ditemukan.
 <script>
   try {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: "supabase-oauth", success: false, error: ${JSON.stringify(
-        error.message
-      )} }, ${JSON.stringify(openerOrigin)});
+      window.opener.postMessage(
+        { type: "supabase-oauth", success: false, error: ${JSON.stringify(error.message)} },
+        ${JSON.stringify(openerOrigin)}
+      );
     }
   } catch (e) {}
   window.close();
@@ -60,16 +63,17 @@ Login gagal: ${error.message}
     );
   }
 
-  // sukses → cookie sudah ke-set oleh createServerClient
+  // sukses → cookie sudah ke-set oleh createSupabaseServerClient
   if (popup) {
     const html = `<!doctype html>
 <html><body>
 <script>
   try {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: "supabase-oauth", success: true, next: ${JSON.stringify(
-        next
-      )} }, ${JSON.stringify(openerOrigin)});
+      window.opener.postMessage(
+        { type: "supabase-oauth", success: true, next: ${JSON.stringify(next)} },
+        ${JSON.stringify(openerOrigin)}
+      );
     }
   } catch (e) {}
   window.close();
