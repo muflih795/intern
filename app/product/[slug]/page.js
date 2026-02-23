@@ -23,7 +23,10 @@ export default function ProductBySlugPage() {
   const router = useRouter();
 
   const slug = useMemo(
-    () => decodeURIComponent(Array.isArray(raw) ? raw[0] : raw || "").toLowerCase().trim(),
+    () =>
+      decodeURIComponent(Array.isArray(raw) ? raw[0] : raw || "")
+        .toLowerCase()
+        .trim(),
     [raw]
   );
 
@@ -31,20 +34,23 @@ export default function ProductBySlugPage() {
   const [error, setError] = useState("");
 
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState("default");
+  const [sort, setSort] = useState("default"); // default | termurah | termahal
+  const [condition, setCondition] = useState("all"); // all | new | used
 
-  const [openFilter, setOpenFilter] = useState(false);
-  const filterRef = useRef(null);
+  // dropdown sort
+  const [openSort, setOpenSort] = useState(false);
+  const sortRef = useRef(null);
 
   useEffect(() => {
     const onDocClick = (e) => {
-      if (!filterRef.current) return;
-      if (!filterRef.current.contains(e.target)) setOpenFilter(false);
+      if (!sortRef.current) return;
+      if (!sortRef.current.contains(e.target)) setOpenSort(false);
     };
-    if (openFilter) document.addEventListener("mousedown", onDocClick);
+    if (openSort) document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
-  }, [openFilter]);
+  }, [openSort]);
 
+  // debounce search
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
@@ -63,41 +69,37 @@ export default function ProductBySlugPage() {
         let q = supabase
           .from("products")
           .select(
-            "id,nama,brand_slug,kategori,price,image_url,image_urls,deskripsi,is_active,status,stock,date_created"
+            "id,nama,brand_slug,kategori,price,image_url,image_urls,deskripsi,is_active,status,stock,date_created,condition"
           )
-          // ✅ case-insensitive biar aman jika ada 'Published'
           .ilike("status", "published")
           .eq("is_active", true)
-          // ✅ filter brand / kategori (note: untuk slug tanpa spasi aman)
           .or(`brand_slug.eq.${slug},kategori.eq.${slug}`);
 
         if (debouncedSearch) q = q.ilike("nama", `%${debouncedSearch}%`);
 
+        // filter condition
+        if (condition !== "all") q = q.eq("condition", condition);
+
+        // sorting
         if (sort === "termurah") q = q.order("price", { ascending: true, nullsFirst: true });
         else if (sort === "termahal") q = q.order("price", { ascending: false, nullsFirst: false });
         else q = q.order("date_created", { ascending: false });
 
         const { data, error } = await q;
         if (error) throw error;
-
         if (!alive) return;
 
         const rows = Array.isArray(data) ? data : [];
 
-        // ✅ SORT: stok tersedia dulu, stok habis di bawah (stable sort)
+        // stok tersedia dulu, stok habis di bawah (stable)
         const sorted = rows
           .map((p, idx) => ({ p, idx }))
           .sort((a, b) => {
             const sa = Number(a.p?.stock ?? 0);
             const sb = Number(b.p?.stock ?? 0);
-
             const aAvail = sa > 0 ? 1 : 0;
             const bAvail = sb > 0 ? 1 : 0;
-
-            // stok tersedia (1) tampil dulu
             if (aAvail !== bAvail) return bAvail - aAvail;
-
-            // kalau sama2 tersedia / sama2 habis, ikut urutan query (stable)
             return a.idx - b.idx;
           })
           .map((x) => x.p);
@@ -114,7 +116,7 @@ export default function ProductBySlugPage() {
     return () => {
       alive = false;
     };
-  }, [slug, debouncedSearch, sort]);
+  }, [slug, debouncedSearch, sort, condition]);
 
   const heading = slug ? pretty(slug) : "Product";
   const sortLabel = sort === "termurah" ? "Termurah" : sort === "termahal" ? "Termahal" : "Terbaru";
@@ -122,6 +124,7 @@ export default function ProductBySlugPage() {
   return (
     <div className="min-h-[100dvh] bg-neutral-100 flex justify-center">
       <main className="w-full min-h-[100dvh] bg-white md:max-w-[430px] md:shadow md:border flex flex-col">
+        {/* Header */}
         <div className="sticky top-0 bg-white px-4 py-3 shadow flex items-center justify-between gap-3 z-10">
           <button onClick={() => router.back()} aria-label="Kembali">
             <Image src="/back.svg" alt="back" width={14} height={14} className="w-9 h-7 pr-3" />
@@ -144,33 +147,48 @@ export default function ProductBySlugPage() {
           </Link>
         </div>
 
-        <div className="px-4 pt-3 relative mb-4" ref={filterRef}>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Cari produk…"
-                className="w-full border rounded-full px-4 py-2 text-[#D6336C] pr-9"
-                autoComplete="off"
-              />
-              {search && (
-                <button
-                  onClick={() => setSearch("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 text-xs"
-                  aria-label="Bersihkan pencarian"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
+        {/* Search + Filters */}
+        <div className="px-4 pt-3 relative mb-4" ref={sortRef}>
+          {/* Row 1: Search */}
+          <div className="relative">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Cari produk…"
+              className="w-full border rounded-full px-4 py-2 text-[#D6336C] pr-10"
+              autoComplete="off"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 text-xs"
+                aria-label="Bersihkan pencarian"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
+          {/* Row 2: Condition + Sort */}
+          <div className="mt-2 flex gap-2">
+            <select
+              value={condition}
+              onChange={(e) => setCondition(e.target.value)}
+              className="flex-1 h-9 rounded-full border px-3 text-sm border-gray-300 text-gray-700 bg-white"
+              aria-label="Filter kondisi barang"
+              title="Filter kondisi"
+            >
+              <option value="all">Semua</option>
+              <option value="new">Barang Baru</option>
+              <option value="used">Barang Bekas</option>
+            </select>
 
             <button
-              onClick={() => setOpenFilter((v) => !v)}
-              className="px-3 h-9 rounded-full border text-sm border-gray-300 text-gray-700 flex items-center gap-2"
+              onClick={() => setOpenSort((v) => !v)}
+              className="h-9 px-3 rounded-full border text-sm border-gray-300 text-gray-700 flex items-center gap-2"
               aria-haspopup="menu"
-              aria-expanded={openFilter}
-              title="Filter harga"
+              aria-expanded={openSort}
+              title="Urutkan"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
                 <path fill="currentColor" d="M3 5h18v2H3zm4 6h10v2H7zm3 6h4v2h-4z" />
@@ -179,12 +197,16 @@ export default function ProductBySlugPage() {
             </button>
           </div>
 
-          {openFilter && (
-            <div role="menu" className="absolute right-4 mt-2 w-44 rounded-xl border bg-white shadow z-20 overflow-hidden">
+          {/* Dropdown Sort */}
+          {openSort && (
+            <div
+              role="menu"
+              className="absolute right-4 mt-2 w-44 rounded-xl border bg-white shadow z-20 overflow-hidden"
+            >
               <button
                 onClick={() => {
                   setSort("termurah");
-                  setOpenFilter(false);
+                  setOpenSort(false);
                 }}
                 className={`w-full text-left text-sm px-4 py-2 hover:bg-pink-50 ${
                   sort === "termurah" ? "text-pink-600 font-medium" : "text-gray-800"
@@ -196,7 +218,7 @@ export default function ProductBySlugPage() {
               <button
                 onClick={() => {
                   setSort("termahal");
-                  setOpenFilter(false);
+                  setOpenSort(false);
                 }}
                 className={`w-full text-left text-sm px-4 py-2 hover:bg-pink-50 ${
                   sort === "termahal" ? "text-pink-600 font-medium" : "text-gray-800"
@@ -209,7 +231,7 @@ export default function ProductBySlugPage() {
               <button
                 onClick={() => {
                   setSort("default");
-                  setOpenFilter(false);
+                  setOpenSort(false);
                 }}
                 className={`w-full text-left text-sm px-4 py-2 hover:bg-pink-50 ${
                   sort === "default" ? "text-pink-600 font-medium" : "text-gray-800"
@@ -222,6 +244,7 @@ export default function ProductBySlugPage() {
           )}
         </div>
 
+        {/* List */}
         {items === null ? (
           <div className="px-4 py-6 grid grid-cols-2 gap-3">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -238,6 +261,14 @@ export default function ProductBySlugPage() {
               const stock = Number.isFinite(p?.stock) ? p.stock : null;
               const soldOut = stock !== null && stock <= 0;
 
+              // ✅ Keterangan kondisi: Barang Baru / Barang Bekas
+              const condLabel =
+                p?.condition === "new"
+                  ? "Barang Baru"
+                  : p?.condition === "used"
+                  ? "Barang Bekas"
+                  : null;
+
               return (
                 <Link
                   key={p.id}
@@ -245,7 +276,29 @@ export default function ProductBySlugPage() {
                   className="block bg-white rounded-xl shadow-sm border overflow-hidden"
                 >
                   <div className="relative w-full h-[160px]">
-                    <Image src={p.image_url || "/placeholder.png"} alt={p.nama} fill className="object-cover" />
+                    <Image
+                      src={p.image_url || "/placeholder.png"}
+                      alt={p.nama}
+                      fill
+                      className="object-cover"
+                    />
+
+                    {/* ✅ Badge kondisi di card (pojok kiri atas gambar) */}
+                    {condLabel && (
+                      <div className="absolute top-2 left-2">
+                        <span
+                          className={`px-2 py-1 rounded-full text-[10px] font-semibold border bg-white/95
+                            ${
+                              p.condition === "new"
+                                ? "text-green-700 border-green-200 bg-green-50/95"
+                                : "text-yellow-700 border-yellow-200 bg-yellow-50/95"
+                            }`}
+                        >
+                          {condLabel}
+                        </span>
+                      </div>
+                    )}
+
                     {soldOut && (
                       <div className="absolute inset-0 bg-black/40 grid place-items-center">
                         <span className="px-3 py-1 rounded-full text-xs font-semibold bg-white text-gray-800">
@@ -257,11 +310,24 @@ export default function ProductBySlugPage() {
 
                   <div className="p-2">
                     <p className="text-[13px] text-black line-clamp-2">{p.nama}</p>
+
                     {typeof p.price === "number" && (
-                      <p className="text-[12px] text-[#D6336C] font-semibold mt-1">{formatIDR(p.price)}</p>
+                      <p className="text-[12px] text-[#D6336C] font-semibold mt-1">
+                        {formatIDR(p.price)}
+                      </p>
                     )}
+
+                    {/* ✅ Keterangan kondisi juga muncul di bawah harga (biar makin jelas) */}
+                    {condLabel && (
+                      <p className="text-[11px] text-gray-600 mt-1">
+                        Kondisi: <span className="font-medium">{condLabel}</span>
+                      </p>
+                    )}
+
                     {stock !== null && (
-                      <p className="text-[11px] text-gray-500 mt-1">Stok: {stock > 0 ? stock : "Habis"}</p>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        Stok: {stock > 0 ? stock : "Habis"}
+                      </p>
                     )}
                   </div>
                 </Link>

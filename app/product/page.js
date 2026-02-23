@@ -99,7 +99,7 @@ export default function ProductAllPage() {
         <div className="px-4 py-3">
           <input
             placeholder="Produk, Jenis Produk..."
-            className="w-full rounded-full border border-gray-200 bg-white px-4 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-[#D6336C]"
+            className="w-full rounded-full border border-gray-200 bg-white px-4 py-2 text-sm !text-gray-900 caret-[#D6336C] placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-[#D6336C]"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             autoComplete="off"
@@ -121,7 +121,10 @@ export default function ProductAllPage() {
           {brands === null ? (
             <div className="flex gap-3 overflow-x-auto no-scrollbar">
               {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="w-[80px] h-[100px] rounded-2xl bg-gray-100 animate-pulse shrink-0" />
+                <div
+                  key={i}
+                  className="w-[80px] h-[100px] rounded-2xl bg-gray-100 animate-pulse shrink-0"
+                />
               ))}
             </div>
           ) : (
@@ -134,7 +137,11 @@ export default function ProductAllPage() {
                       ? b.logoSrc
                       : "/brand/brand-placeholder.svg";
                   return (
-                    <Link key={b.id} href={`/product/${b.slug}`} className="w-[80px] shrink-0 snap-start">
+                    <Link
+                      key={b.id}
+                      href={`/product/${b.slug}`}
+                      className="w-[80px] shrink-0 snap-start"
+                    >
                       <div className="w-[80px] h-[80px] rounded-2xl border bg-white grid place-items-center overflow-hidden">
                         <Image
                           src={logo}
@@ -145,7 +152,9 @@ export default function ProductAllPage() {
                           priority={i === 0}
                         />
                       </div>
-                      <p className="text-center text-[#B6B6B6] text-xs mt-1">{b?.name || "Brand"}</p>
+                      <p className="text-center text-[#B6B6B6] text-xs mt-1">
+                        {b?.name || "Brand"}
+                      </p>
                     </Link>
                   );
                 })}
@@ -204,9 +213,13 @@ export default function ProductAllPage() {
             ))}
           </div>
         ) : error ? (
-          <div className="px-4 py-10 text-center text-sm text-rose-600">Error: {error}</div>
+          <div className="px-4 py-10 text-center text-sm text-rose-600">
+            Error: {error}
+          </div>
         ) : filtered.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-gray-600">Belum ada produk.</div>
+          <div className="px-4 py-10 text-center text-sm text-gray-600">
+            Belum ada produk.
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 px-4 pb-6">
             {filtered.map((p, i) => {
@@ -242,10 +255,14 @@ export default function ProductAllPage() {
                   <div className="p-2">
                     <p className="text-[13px] text-black line-clamp-2">{p.nama}</p>
                     {typeof p.price === "number" && (
-                      <p className="text-[12px] text-[#D6336C] font-semibold mt-1">{formatIDR(p.price)}</p>
+                      <p className="text-[12px] text-[#D6336C] font-semibold mt-1">
+                        {formatIDR(p.price)}
+                      </p>
                     )}
                     {stock !== null && (
-                      <p className="text-[11px] text-gray-500 mt-1">Stok: {stock > 0 ? stock : "Habis"}</p>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        Stok: {stock > 0 ? stock : "Habis"}
+                      </p>
                     )}
                   </div>
                 </Link>

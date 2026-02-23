@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabaseBrowser";
 
 const supabase = supabaseBrowser;
-
 const PHONE_LOGIN_ENABLED = false;
 
 export default function LoginClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const popupRef = useRef(null);
   const pollRef = useRef(null);
@@ -21,6 +21,11 @@ export default function LoginClient() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
+  // ====== NEXT HANDLING ======
+  const rawNext = searchParams.get("next") || ""; // contoh "/admin"
+  const nextAfterLogin = rawNext && rawNext.startsWith("/") ? rawNext : "/home";
+
+  // ====== PREFILL ======
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const qEmail = sp.get("email");
@@ -41,26 +46,128 @@ export default function LoginClient() {
     }
   }, []);
 
-  // ✅ Optional: tetap terima postMessage kalau same-origin (atau kalau kamu mau longgarkan)
+  function stopPolling() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
+
+  function openCenteredPopup(url, title = "Login Google") {
+    const w = 520;
+    const h = 650;
+    const y = window.top.outerHeight / 2 + window.top.screenY - h / 2;
+    const x = window.top.outerWidth / 2 + window.top.screenX - w / 2;
+    return window.open(
+      url,
+      title,
+      `toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=${w},height=${h},top=${y},left=${x}`
+    );
+  }
+
+  // ====== ADMIN CHECK + REDIRECT (CLIENT-BASED, FIXED) ======
+  async function redirectAfterLogin(targetNext = "/home") {
+    // pastikan session sudah ada
+    try {
+      await supabase.auth.getSession();
+    } catch {}
+
+    // ambil user id dari session
+    const { data: ures, error: uerr } = await supabase.auth.getUser();
+    if (uerr || !ures?.user?.id) {
+      router.replace("/login");
+      return;
+    }
+
+    const userId = ures.user.id;
+
+    // cek role di public.users
+    const { data: row, error } = await supabase
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .maybeSingle();
+
+    // kalau error (sering karena RLS), fallback ke home
+    if (error) {
+      console.warn("role check error:", error.message);
+      router.replace("/home");
+      return;
+    }
+
+    const isAdmin = row?.role === "admin";
+
+    // kalau user minta next=/admin tapi bukan admin, jatuhkan ke home
+    if (targetNext === "/admin" && !isAdmin) {
+      router.replace("/home");
+      return;
+    }
+
+    // kalau tidak ada ?next=..., admin auto ke /admin
+    if (!rawNext) {
+      router.replace(isAdmin ? "/admin" : "/home");
+      return;
+    }
+
+    // kalau ada ?next=..., hormati (admin boleh masuk /admin)
+    router.replace(isAdmin ? targetNext : "/home");
+  }
+
+  // fallback polling: kalau postMessage gak sampai, tetap bisa redirect setelah session terbentuk
+  function startSessionPolling(next = "/home") {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session) {
+          stopPolling();
+          setGoogleLoading(false);
+          try {
+            popupRef.current?.close?.();
+          } catch {}
+
+          await redirectAfterLogin(next);
+          return;
+        }
+        if (popupRef.current && popupRef.current.closed) {
+          stopPolling();
+          setGoogleLoading(false);
+        }
+      } catch {
+        // biarkan polling lanjut
+      }
+    }, 600);
+  }
+
+  // Terima pesan dari /auth/callback (popup)
   useEffect(() => {
     const onMessage = async (event) => {
       const data = event.data;
       if (!data || data.type !== "supabase-oauth") return;
 
       if (data.success) {
+        stopPolling();
         setGoogleLoading(false);
-        try { await supabase.auth.getSession(); } catch {}
-        // tutup popup kalau masih kebuka
-        try { popupRef.current?.close?.(); } catch {}
-        router.replace(data.next || "/home");
+        try {
+          popupRef.current?.close?.();
+        } catch {}
+
+        // pastikan session kebaca
+        try {
+          await supabase.auth.getSession();
+        } catch {}
+
+        await redirectAfterLogin(data.next || nextAfterLogin || "/home");
       } else {
-        setMsg(data.error || "Login Google gagal.");
+        stopPolling();
         setGoogleLoading(false);
+        setMsg(data.error || "Login Google gagal.");
       }
     };
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
+    // eslint-disable-next-line
   }, [router]);
 
   const isEmail = (v) => /\S+@\S+\.\S+/.test(v);
@@ -75,67 +182,18 @@ export default function LoginClient() {
     return "+" + x;
   }
 
-  function openCenteredPopup(url, title = "Login Google") {
-    const w = 520;
-    const h = 650;
-    const y = window.top.outerHeight / 2 + window.top.screenY - h / 2;
-    const x = window.top.outerWidth / 2 + window.top.screenX - w / 2;
-    return window.open(
-      url,
-      title,
-      `toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=yes, resizable=yes, copyhistory=no, width=${w}, height=${h}, top=${y}, left=${x}`
-    );
-  }
-
-  // ✅ fungsi untuk stop polling
-  function stopPolling() {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }
-
-  // ✅ paling penting: polling session + close popup + redirect
-  function startSessionPolling(next = "/home") {
-    stopPolling();
-
-    pollRef.current = setInterval(async () => {
-      try {
-        const { data } = await supabase.auth.getSession();
-        const session = data?.session;
-
-        // kalau sudah ada session -> login sukses
-        if (session) {
-          stopPolling();
-          setGoogleLoading(false);
-
-          try { popupRef.current?.close?.(); } catch {}
-          router.replace(next);
-          return;
-        }
-
-        // kalau popup ditutup user -> stop
-        if (popupRef.current && popupRef.current.closed) {
-          stopPolling();
-          setGoogleLoading(false);
-        }
-      } catch {
-        // kalau error, biarin polling lanjut
-      }
-    }, 500);
-  }
-
   async function onGoogleLogin() {
     if (googleLoading || loading) return;
     setMsg("");
     setGoogleLoading(true);
 
     try {
-      const next = "/home";
+      const next = nextAfterLogin;
 
-      const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(
-        next
-      )}&popup=1`;
+      const redirectTo =
+        `${window.location.origin}/auth/callback` +
+        `?next=${encodeURIComponent(next)}` +
+        `&popup=1`;
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -156,8 +214,6 @@ export default function LoginClient() {
       }
 
       popupRef.current = win;
-
-      // ✅ ini yang bikin auto close + auto redirect meskipun beda domain
       startSessionPolling(next);
     } catch (e) {
       setGoogleLoading(false);
@@ -175,6 +231,7 @@ export default function LoginClient() {
 
     const isIdEmail = isEmail(id);
     const isIdPhone = !isIdEmail && isPhone(id);
+
     if (!isIdEmail && !isIdPhone) {
       return setMsg("Format tidak valid. Gunakan email yang benar atau nomor HP (mis. +62812xxxx).");
     }
@@ -189,8 +246,10 @@ export default function LoginClient() {
       const { error } = await supabase.auth.signInWithPassword(payload);
       if (error) throw error;
 
-      await supabase.auth.refreshSession();
-      router.replace("/home");
+      await supabase.auth.getSession();
+
+      // ✅ redirect by role (admin -> /admin)
+      await redirectAfterLogin(nextAfterLogin);
     } catch (err) {
       const t = (err?.message || "").toLowerCase();
       if (t.includes("invalid_grant") || t.includes("invalid login credentials")) {
@@ -249,9 +308,7 @@ export default function LoginClient() {
           />
 
           {typingPhoneWhileDisabled && (
-            <p className="text-xs text-rose-600 -mt-2">
-              Phone logins are disabled — gunakan email.
-            </p>
+            <p className="text-xs text-rose-600 -mt-2">Phone logins are disabled — gunakan email.</p>
           )}
 
           <label className="block text-sm">

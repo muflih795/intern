@@ -10,7 +10,7 @@ function normPhoneToE164(idPhone = "") {
   if (!p) return "";
   if (p.startsWith("+")) return p;
   if (p.startsWith("0")) return "+62" + p.slice(1);
-  return p;
+  return p; // kalau user sudah input 62xxxx tanpa +
 }
 const isEmail = (v = "") => /\S+@\S+\.\S+/.test(String(v).trim());
 
@@ -65,8 +65,7 @@ export default function RegistPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  const onChange = (e) =>
-    setForm((s) => ({ ...s, [e.target.name]: e.target.value }));
+  const onChange = (e) => setForm((s) => ({ ...s, [e.target.name]: e.target.value }));
 
   async function handleSendOtp(e) {
     e.preventDefault();
@@ -88,13 +87,15 @@ export default function RegistPage() {
       emailRef.current = email;
       phoneRef.current = phoneE164;
 
+      // NOTE:
+      // Ini flow passwordless OTP. Pastikan Supabase Email OTP aktif.
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
           shouldCreateUser: true,
           data: {
             full_name: name,
-            phone: phoneE164,
+            phone: phoneE164 || null,
             phone_verified: false,
           },
         },
@@ -104,15 +105,12 @@ export default function RegistPage() {
       setStep("otp");
       setMsg("Kode OTP sudah dikirim ke email kamu. Cek inbox/spam.");
     } catch (err) {
-      console.error(err);
-      const code = String(err?.status || err?.code || "");
-      if (code === "429") {
+      console.error("sendOtp error:", err);
+      const status = String(err?.status || "");
+      if (status === "429") {
         setMsg("Terlalu sering mengirim OTP. Coba lagi beberapa menit lagi.");
       } else {
-        setMsg(
-          err?.message ||
-            "Gagal mengirim OTP. Pastikan SMTP aktif & template Magic link menampilkan {{ .Token }}."
-        );
+        setMsg(err?.message || "Gagal mengirim OTP. Pastikan Supabase Email OTP aktif (bukan Magic Link).");
       }
     } finally {
       setLoading(false);
@@ -124,23 +122,33 @@ export default function RegistPage() {
     setMsg("");
 
     const code = (otp || "").replace(/\D/g, "");
-    if (!code || code.length < 6) return setMsg("Masukkan kode OTP (6 digit).");
+    if (!code || code.length !== 6) return setMsg("Masukkan kode OTP (6 digit).");
 
     setLoading(true);
     try {
-      const { error: verErr } = await supabase.auth.verifyOtp({
+      // Verifikasi OTP email (butuh Email OTP mode)
+      const { data: verData, error: verErr } = await supabase.auth.verifyOtp({
         email: emailRef.current,
         token: code,
         type: "email",
       });
       if (verErr) throw verErr;
 
+      // Pastikan sudah ada session setelah verify
+      if (!verData?.session) {
+        // Kadang tergantung setting, session tidak langsung balik.
+        // Minimal kita cek apakah user sudah ada.
+        const { data: s } = await supabase.auth.getSession();
+        if (!s?.session) throw new Error("Session tidak terbentuk setelah verifikasi OTP. Cek setting Auth Email OTP.");
+      }
+
+      // Set password + metadata (phone tetap optional, verified false)
       const { error: updErr } = await supabase.auth.updateUser({
         password: form.password,
         data: {
           full_name: form.name.trim(),
-          phone: phoneRef.current,
-          phone_verified: !!phoneRef.current,
+          phone: phoneRef.current || null,
+          phone_verified: false,
         },
       });
       if (updErr) throw updErr;
@@ -149,10 +157,10 @@ export default function RegistPage() {
       setMsg("Registrasi berhasil! Mengalihkan ke halaman login…");
       router.replace("/login");
     } catch (err) {
-      console.error(err);
+      console.error("verify error:", err);
       setMsg(
         err?.message ||
-          "Verifikasi gagal. Pastikan kodenya benar, belum kedaluwarsa, dan 'Confirm email' dimatikan."
+          "Verifikasi gagal. Jika email yang masuk berupa link (bukan kode), berarti Supabase kamu masih Magic Link, bukan Email OTP."
       );
     } finally {
       setLoading(false);
@@ -162,6 +170,7 @@ export default function RegistPage() {
   async function resendOtp() {
     if (loading) return;
     setMsg("");
+
     const email = emailRef.current || form.email.trim().toLowerCase();
     if (!isEmail(email)) return setMsg("Email tidak valid.");
 
@@ -173,7 +182,7 @@ export default function RegistPage() {
           shouldCreateUser: true,
           data: {
             full_name: form.name.trim(),
-            phone: phoneRef.current || normPhoneToE164(form.phone),
+            phone: phoneRef.current || normPhoneToE164(form.phone) || null,
             phone_verified: false,
           },
         },
@@ -181,13 +190,10 @@ export default function RegistPage() {
       if (error) throw error;
       setMsg("Kode OTP dikirim ulang. Cek inbox/spam.");
     } catch (err) {
-      console.error(err);
-      const code = String(err?.status || err?.code || "");
-      if (code === "429") {
-        setMsg("Terlalu sering mengirim OTP. Coba sebentar lagi.");
-      } else {
-        setMsg(err?.message || "Gagal mengirim ulang OTP.");
-      }
+      console.error("resend error:", err);
+      const status = String(err?.status || "");
+      if (status === "429") setMsg("Terlalu sering mengirim OTP. Coba sebentar lagi.");
+      else setMsg(err?.message || "Gagal mengirim ulang OTP.");
     } finally {
       setLoading(false);
     }
@@ -215,10 +221,7 @@ export default function RegistPage() {
             {msg && <p className="text-sm text-center text-rose-600">{msg}</p>}
 
             <div className="pt-2">
-              <button
-                disabled={loading}
-                className="w-full bg-[#D6336C] text-white font-semibold rounded-lg py-3 disabled:opacity-60 shadow-sm"
-              >
+              <button disabled={loading} className="w-full bg-[#D6336C] text-white font-semibold rounded-lg py-3 disabled:opacity-60 shadow-sm">
                 {loading ? "Mengirim OTP..." : "Kirim OTP ke Email"}
               </button>
             </div>
@@ -237,10 +240,7 @@ export default function RegistPage() {
 
             {msg && <p className="text-sm text-center text-rose-600">{msg}</p>}
 
-            <button
-              disabled={loading}
-              className="w-full bg-[#D6336C] text-white font-semibold rounded-lg py-3 disabled:opacity-60"
-            >
+            <button disabled={loading} className="w-full bg-[#D6336C] text-white font-semibold rounded-lg py-3 disabled:opacity-60">
               {loading ? "Memverifikasi..." : "Verifikasi & Buat Akun"}
             </button>
 
@@ -257,9 +257,7 @@ export default function RegistPage() {
 
         {step === "done" && (
           <div className="mt-6 mb-12">
-            <p className="text-center text-emerald-600 font-medium">
-              Registrasi berhasil! Silakan login.
-            </p>
+            <p className="text-center text-emerald-600 font-medium">Registrasi berhasil! Silakan login.</p>
           </div>
         )}
       </main>

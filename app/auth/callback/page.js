@@ -1,80 +1,83 @@
-"use client";
+import { NextResponse } from "next/server";
+import { supabaseServer } from "@/lib/supabaseServer";
 
-import { Suspense, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { supabaseBrowser } from "@/lib/supabaseBrowser";
+export async function GET(req: Request) {
+  const url = new URL(req.url);
 
-const supabase = supabaseBrowser;
+  const code = url.searchParams.get("code");
+  const next = url.searchParams.get("next") || "/home";
+  const popup = url.searchParams.get("popup") === "1";
 
-function CallbackInner() {
-  const router = useRouter();
-  const sp = useSearchParams();
-  const [msg, setMsg] = useState("Memproses login Google...");
+  // penting: origin opener untuk postMessage (kalau gak ada, pakai origin callback)
+  const openerOrigin = url.searchParams.get("openerOrigin") || url.origin;
 
-  useEffect(() => {
-    const run = async () => {
-      const next = sp.get("next") || "/home";
-      const popup = sp.get("popup") === "1";
+  if (!code) {
+    // kalau ga ada code, jangan lanjut. biasanya berarti redirect bukan pkce/code flow.
+    // Tapi dengan SSR flow ini, normalnya selalu ada code.
+    if (popup) {
+      const html = `<!doctype html>
+<html><body>
+<script>
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: "supabase-oauth", success: false, error: "Kode OAuth tidak ditemukan." }, ${JSON.stringify(
+        openerOrigin
+      )});
+    }
+  } catch (e) {}
+  window.close();
+</script>
+Kode OAuth tidak ditemukan.
+</body></html>`;
+      return new Response(html, { headers: { "content-type": "text/html" } });
+    }
 
-      const sendToOpener = (payload) => {
-        try {
-          if (popup && window.opener && !window.opener.closed) {
-            window.opener.postMessage(payload, window.location.origin);
-            return true;
-          }
-        } catch {}
-        return false;
-      };
+    return NextResponse.redirect(new URL(`/login?error=missing_code`, url.origin));
+  }
 
-      try {
-        const errDesc = sp.get("error_description") || sp.get("error");
-        if (errDesc) {
-          sendToOpener({ type: "supabase-oauth", success: false, error: errDesc });
-          setMsg("Login gagal: " + errDesc);
-          if (popup) setTimeout(() => window.close(), 400);
-          return;
-        }
+  const supabase = supabaseServer();
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
 
-        // ✅ PENTING: pakai URL lengkap, bukan hanya "code"
-        const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
-        if (error) throw error;
+  if (error) {
+    if (popup) {
+      const html = `<!doctype html>
+<html><body>
+<script>
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: "supabase-oauth", success: false, error: ${JSON.stringify(
+        error.message
+      )} }, ${JSON.stringify(openerOrigin)});
+    }
+  } catch (e) {}
+  window.close();
+</script>
+Login gagal: ${error.message}
+</body></html>`;
+      return new Response(html, { headers: { "content-type": "text/html" } });
+    }
 
-        // pastikan session kebaca
-        await supabase.auth.getSession();
+    return NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(error.message)}`, url.origin));
+  }
 
-        const ok = sendToOpener({ type: "supabase-oauth", success: true, next });
+  // sukses → cookie sudah ke-set oleh createServerClient
+  if (popup) {
+    const html = `<!doctype html>
+<html><body>
+<script>
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage({ type: "supabase-oauth", success: true, next: ${JSON.stringify(
+        next
+      )} }, ${JSON.stringify(openerOrigin)});
+    }
+  } catch (e) {}
+  window.close();
+</script>
+Sukses. Menutup popup...
+</body></html>`;
+    return new Response(html, { headers: { "content-type": "text/html" } });
+  }
 
-        if (popup && ok) {
-          setMsg("Berhasil. Menutup popup...");
-          setTimeout(() => window.close(), 250);
-        } else {
-          router.replace(next);
-        }
-      } catch (e) {
-        const message = e?.message || "Terjadi kesalahan saat memproses login.";
-        sendToOpener({ type: "supabase-oauth", success: false, error: message });
-        setMsg(message);
-        if (popup) setTimeout(() => window.close(), 500);
-      }
-    };
-
-    run();
-  }, [sp, router]);
-
-  return (
-    <div className="min-h-[100dvh] flex items-center justify-center bg-neutral-100 p-6">
-      <div className="w-full max-w-sm rounded-2xl bg-white shadow p-6 text-center">
-        <div className="text-black font-semibold">OAuth Callback</div>
-        <div className="text-sm text-gray-600 mt-2">{msg}</div>
-      </div>
-    </div>
-  );
-}
-
-export default function AuthCallbackPage() {
-  return (
-    <Suspense fallback={<div className="min-h-[100dvh] bg-neutral-100" />}>
-      <CallbackInner />
-    </Suspense>
-  );
+  return NextResponse.redirect(new URL(next, url.origin));
 }
